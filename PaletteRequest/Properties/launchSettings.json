@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "PaletteRequest (Package)": {
+      "commandName": "MsixPackage",
+      "doNotLaunchApp": true
+    },
+    "PaletteRequest (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
