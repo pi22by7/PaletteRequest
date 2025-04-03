@@ -64,5 +64,7 @@
 
     <PublishTrimmed>true</PublishTrimmed>
     <PublishSingleFile>true</PublishSingleFile>
+    <PackageCertificateThumbprint>21E36B70F172683B292B5DB3F2910C654CC4AE78</PackageCertificateThumbprint>
+    <AppxPackageSigningEnabled>True</AppxPackageSigningEnabled>
   </PropertyGroup>
 </Project>

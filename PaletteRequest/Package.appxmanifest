@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
@@ -10,14 +10,14 @@
 
   <Identity
     Name="PaletteRequest"
-    Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"
+    Publisher="CN=pi22by7"
     Version="0.0.1.0" />
   <!-- When you're ready to publish your extension, you'll need to change the
        Publisher= to match your own identity -->
 
   <Properties>
     <DisplayName>PalleteRequest</DisplayName>
-    <PublisherDisplayName>A Lone Developer</PublisherDisplayName>
+    <PublisherDisplayName>pi22by7</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
 
@@ -36,7 +36,7 @@
       EntryPoint="$targetentrypoint$">
       <uap:VisualElements
         DisplayName="PalleteRequest"
-        Description="PalleteRequest"
+        Description="A simple API testing extension for PowerToys Command Palette that allows you to quickly send HTTP requests and view responses without leaving your workflow."
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">
