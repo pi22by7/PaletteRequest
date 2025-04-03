@@ -1,6 +1,5 @@
 using Microsoft.CommandPalette.Extensions;
 using Microsoft.CommandPalette.Extensions.Toolkit;
-using PaletteRequest;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -9,13 +8,68 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
+using System.Diagnostics;
 
 namespace PaletteRequest
 {
+    // Helper class for logging to a file
+    internal static class FileLogger
+    {
+        private const string LogFilePath = "F:/palette_request_log.txt";
+
+        static FileLogger()
+        {
+            // Create a new log file or clear existing one on startup
+            try
+            {
+                System.IO.File.WriteAllText(LogFilePath, $"=== PaletteRequest Log Started at {DateTime.Now} ===\r\n");
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    System.IO.File.WriteAllText("F:/palette_startup_error.txt", ex.ToString());
+                }
+                catch
+                {
+                    // Nothing more we can do
+                }
+            }
+        }
+
+        public static void Log(string message)
+        {
+            try
+            {
+                string logEntry = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}";
+                System.IO.File.AppendAllText(LogFilePath, logEntry + Environment.NewLine);
+            }
+            catch (Exception ex)
+            {
+                // If we can't log to the file, at least try to create a file with the error
+                try
+                {
+                    System.IO.File.WriteAllText("F:/palette_error.txt", ex.ToString());
+                }
+                catch
+                {
+                    // Last resort, can't do anything more
+                }
+            }
+        }
+    }
+
+    // Main entry point page for the extension
     internal sealed partial class PaletteRequestPage : ListPage
     {
         private readonly List<ListItem> _items = new();
         private static readonly List<SavedRequest> _history = new();
+
+        // Page items for GET, POST, PUT, DELETE requests
+        private readonly GetRequestPage _getPage = new GetRequestPage();
+        private readonly PostRequestPage _postPage = new PostRequestPage();
+        private readonly PutRequestPage _putPage = new PutRequestPage();
+        private readonly DeleteRequestPage _deletePage = new DeleteRequestPage();
 
         public PaletteRequestPage()
         {
@@ -23,21 +77,20 @@ namespace PaletteRequest
             Title = "PaletteRequest";
             Name = "API Tester";
 
+            FileLogger.Log("PaletteRequestPage initialized");
             InitializeItems();
         }
 
         private void InitializeItems()
         {
+            FileLogger.Log("Initializing items");
             _items.Clear();
 
-            // Add commands for different HTTP methods
-            _items.AddRange(new[]
-            {
-                new ListItem(new NewRequestCommand(this, "GET")) { Title = "New GET Request" },
-                new ListItem(new NewRequestCommand(this, "POST")) { Title = "New POST Request" },
-                new ListItem(new NewRequestCommand(this, "PUT")) { Title = "New PUT Request" },
-                new ListItem(new NewRequestCommand(this, "DELETE")) { Title = "New DELETE Request" }
-            });
+            // Add fixed command items that are direct page objects
+            _items.Add(new ListItem(_getPage) { Title = "New GET Request" });
+            _items.Add(new ListItem(_postPage) { Title = "New POST Request" });
+            _items.Add(new ListItem(_putPage) { Title = "New PUT Request" });
+            _items.Add(new ListItem(_deletePage) { Title = "New DELETE Request" });
 
             // Add recent requests
             if (_history.Count > 0)
@@ -54,298 +107,381 @@ namespace PaletteRequest
                     });
                 }
             }
+
+            FileLogger.Log($"Initialized {_items.Count} items");
         }
 
         public override IListItem[] GetItems()
         {
+            FileLogger.Log("GetItems called");
             return _items.ToArray();
         }
 
         public void AddToHistory(SavedRequest request)
         {
+            FileLogger.Log($"Adding request to history: {request.Method} {request.Url}");
+
             var existingIndex = _history.FindIndex(r => r.Url == request.Url && r.Method == request.Method);
             if (existingIndex >= 0)
             {
+                FileLogger.Log("Removing existing entry from history");
                 _history.RemoveAt(existingIndex);
             }
 
             _history.Insert(0, request);
+            FileLogger.Log($"History now contains {_history.Count} items");
+
             InitializeItems();
+            FileLogger.Log("InitializeItems completed");
+
             RaiseItemsChanged();
+            FileLogger.Log("RaiseItemsChanged called");
         }
     }
-}
 
-internal sealed partial class NewRequestCommand : InvokableCommand
-{
-    private readonly PaletteRequestPage _page;
-    private readonly string _method;
-
-    public NewRequestCommand(PaletteRequestPage page, string method)
+    // Base class for all request pages
+    internal abstract class BaseRequestPage : ListPage
     {
-        _page = page;
-        _method = method;
-        Name = $"New {method} Request";
-        Icon = new IconInfo("\uE8A7"); // Web icon
-    }
+        protected readonly string Method;
 
-    public override CommandResult Invoke()
-    {
-        var formContent = new RequestFormContent(_page, _method);
-        var formPage = new FormContentPage(formContent)
+        protected BaseRequestPage(string method)
         {
-            Title = $"Create {_method} Request"
-        };
+            Method = method;
+            Icon = new IconInfo("\uE8A7"); // Web icon
+            Title = $"New {Method} Request";
+            Name = Method;
 
-        return CommandResult.GoToPage(new GoToPageArgs { PageId = formPage.Id, NavigationMode = NavigationMode.Push });
-    }
-}
-
-internal sealed partial class RepeatRequestCommand : InvokableCommand
-{
-    private readonly PaletteRequestPage _page;
-    private readonly SavedRequest _request;
-
-    public RepeatRequestCommand(PaletteRequestPage page, SavedRequest request)
-    {
-        _page = page;
-        _request = request;
-        Name = $"Repeat {request.Method} Request";
-        Icon = new IconInfo("\uE72C"); // Refresh icon
-    }
-
-    public override CommandResult Invoke()
-    {
-        _request.LastUsed = DateTime.Now;
-        _page.AddToHistory(_request);
-
-        Task.Run(async () =>
-        {
-            var response = await HttpRequestExecutor.ExecuteRequestAsync(_request);
-            string message = response.IsSuccess
-                ? $"{response.StatusCode} {response.StatusMessage}"
-                : $"Error: {response.ErrorMessage}";
-
-            ToastStatusMessage toast = new ToastStatusMessage($"{_request.Method} {_request.Url}: {message}");
-            toast.Show();
-        });
-
-        return CommandResult.KeepOpen();
-    }
-}
-
-
-internal sealed partial class FormContentPage : ContentPage
-{
-    private readonly IContent _formContent;
-
-    public FormContentPage(IContent formContent)
-    {
-        _formContent = formContent;
-        Title = "Request Form";
-    }
-
-    public override IContent[] GetContent()
-    {
-        return new IContent[] { _formContent };
-    }
-}
-
-internal sealed partial class RequestFormContent : FormContent
-{
-    private readonly PaletteRequestPage _page;
-    private readonly string _method;
-
-    public RequestFormContent(PaletteRequestPage page, string method)
-    {
-        _page = page;
-        _method = method;
-        TemplateJson = CreateFormTemplate(method);
-    }
-
-    private static string CreateFormTemplate(string method)
-    {
-        var templateBase = @"{
-            ""type"": ""AdaptiveCard"",
-            ""version"": ""1.0"",
-            ""body"": [
-                {
-                    ""type"": ""TextBlock"",
-                    ""text"": ""Create " + method + @" Request"",
-                    ""weight"": ""Bolder"",
-                    ""size"": ""Medium""
-                },
-                {
-                    ""type"": ""Input.Text"",
-                    ""id"": ""url"",
-                    ""label"": ""URL"",
-                    ""placeholder"": ""https://api.example.com/endpoint""
-                },
-                {
-                    ""type"": ""Input.Text"",
-                    ""id"": ""headers"",
-                    ""label"": ""Headers (JSON format, optional)"",
-                    ""placeholder"": ""{\""Content-Type\"":\""application/json\""}"",
-                    ""isMultiline"": true
-                }";
-
-        if (method == "POST" || method == "PUT")
-        {
-            templateBase += @",
-                {
-                    ""type"": ""Input.Text"",
-                    ""id"": ""body"",
-                    ""label"": ""Request Body"",
-                    ""placeholder"": ""{\""key\"":\""value\""}"",
-                    ""isMultiline"": true
-                }";
+            // Add an explicit ID for each page
+            Id = $"request-page-{method.ToLowerInvariant()}";
+            FileLogger.Log($"Created {Method} page with ID: {Id}");
         }
 
-        templateBase += @"
-            ],
-            ""actions"": [
+        public override IListItem[] GetItems()
+        {
+            FileLogger.Log($"GetItems called for {Method} page");
+
+            return new IListItem[]
+            {
+                new ListItem(new RequestCommand(Method))
                 {
-                    ""type"": ""Action.Submit"",
-                    ""title"": ""Send Request""
+                    Title = $"Make a {Method} Request",
+                    Subtitle = "Enter request details"
+                },
+                new ListItem(new OpenURLRequestCommand(Method))
+                {
+                    Title = $"Test {Method} with httpbin.org",
+                    Subtitle = "Sends a test request to httpbin.org"
+                },
+                new ListItem(new ReturnCommand())
+                {
+                    Title = "Return to main menu",
+                    Subtitle = "Go back to the method selection"
                 }
-            ]
-        }";
-
-        return templateBase;
+            };
+        }
     }
 
-    public override CommandResult SubmitForm(string payload)
+    // Command to go back to the main menu
+    internal sealed partial class ReturnCommand : InvokableCommand
     {
-        try
+        public ReturnCommand()
         {
-            var formInput = JsonNode.Parse(payload)?.AsObject();
-            if (formInput == null)
+            Name = "Return";
+            Icon = new IconInfo("\uE72B"); // Back icon
+        }
+
+        public override CommandResult Invoke()
+        {
+            FileLogger.Log("ReturnCommand.Invoke called");
+            return CommandResult.GoHome();
+        }
+    }
+
+    // Command to make a request to a test URL
+    internal sealed partial class OpenURLRequestCommand : InvokableCommand
+    {
+        private readonly string _method;
+
+        public OpenURLRequestCommand(string method)
+        {
+            _method = method;
+            Name = $"Test {method}";
+            Icon = new IconInfo("\uE8A7"); // Web icon
+        }
+
+        public override CommandResult Invoke()
+        {
+            FileLogger.Log($"OpenURLRequestCommand.Invoke called for {_method}");
+
+            try
             {
-                return CommandResult.ShowToast("Error parsing form data");
+                // Define a test URL based on the method
+                string url = _method switch
+                {
+                    "GET" => "https://httpbin.org/get",
+                    "POST" => "https://httpbin.org/post",
+                    "PUT" => "https://httpbin.org/put",
+                    "DELETE" => "https://httpbin.org/delete",
+                    _ => "https://httpbin.org"
+                };
+
+                // Open the browser with the appropriate URL
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = url,
+                    UseShellExecute = true
+                });
+
+                FileLogger.Log($"Opened browser for {_method} request to {url}");
+                return CommandResult.ShowToast($"Opened {url} in browser");
             }
-
-            var url = formInput["url"]?.GetValue<string>();
-            if (string.IsNullOrEmpty(url))
+            catch (Exception ex)
             {
-                return CommandResult.ShowToast("URL is required");
+                FileLogger.Log($"Error in OpenURLRequestCommand.Invoke: {ex}");
+                return CommandResult.ShowToast($"Error: {ex.Message}");
             }
+        }
+    }
 
-            var headersJson = formInput["headers"]?.GetValue<string>();
-            var body = formInput["body"]?.GetValue<string>();
+    // Concrete request pages for each HTTP method
+    internal sealed partial class GetRequestPage : BaseRequestPage
+    {
+        public GetRequestPage() : base("GET") { }
+    }
 
-            var request = new SavedRequest
+    internal sealed partial class PostRequestPage : BaseRequestPage
+    {
+        public PostRequestPage() : base("POST") { }
+    }
+
+    internal sealed partial class PutRequestPage : BaseRequestPage
+    {
+        public PutRequestPage() : base("PUT") { }
+    }
+
+    internal sealed partial class DeleteRequestPage : BaseRequestPage
+    {
+        public DeleteRequestPage() : base("DELETE") { }
+    }
+
+    // Command that handles the actual HTTP request form
+    internal sealed partial class RequestCommand : InvokableCommand
+    {
+        private readonly string _method;
+        private static readonly PaletteRequestPage _mainPage = new PaletteRequestPage();
+
+        public RequestCommand(string method)
+        {
+            _method = method;
+            Name = $"{method} Request";
+            Icon = new IconInfo("\uE8A7"); // Web icon
+        }
+
+        public override CommandResult Invoke()
+        {
+            FileLogger.Log($"RequestCommand.Invoke called for {_method}");
+
+            try
             {
-                Method = _method,
-                Url = url,
-                Headers = headersJson ?? "",
-                Body = body ?? "",
-                LastUsed = DateTime.Now
-            };
+                // Create a simple prompt to get the URL
+                string url = "";
+                string headers = "";
+                string body = "";
 
-            _page.AddToHistory(request);
+                // Show a simple toast message to confirm clicking worked
+                ToastStatusMessage toast = new ToastStatusMessage($"Executing {_method} request...");
+                toast.Show();
+
+                // Create a test request
+                var request = new SavedRequest
+                {
+                    Method = _method,
+                    Url = "https://httpbin.org/get",
+                    Headers = headers,
+                    Body = body,
+                    LastUsed = DateTime.Now
+                };
+
+                // Execute the request
+                Task.Run(async () =>
+                {
+                    FileLogger.Log($"Executing test request to httpbin.org");
+                    var response = await HttpRequestExecutor.ExecuteRequestAsync(request);
+                    string message = response.IsSuccess
+                        ? $"{response.StatusCode} {response.StatusMessage}"
+                        : $"Error: {response.ErrorMessage}";
+
+                    FileLogger.Log($"Request result: {message}");
+
+                    ToastStatusMessage resultToast = new ToastStatusMessage($"{_method} request to httpbin.org: {message}");
+                    resultToast.Show();
+                });
+
+                return CommandResult.Hide();
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"Error in RequestCommand.Invoke: {ex}");
+                return CommandResult.ShowToast($"Error: {ex.Message}");
+            }
+        }
+    }
+
+    // Command to repeat a previous request
+    internal sealed partial class RepeatRequestCommand : InvokableCommand
+    {
+        private readonly PaletteRequestPage _page;
+        private readonly SavedRequest _request;
+
+        public RepeatRequestCommand(PaletteRequestPage page, SavedRequest request)
+        {
+            _page = page;
+            _request = request;
+            Name = $"Repeat {request.Method} Request";
+            Icon = new IconInfo("\uE72C"); // Refresh icon
+        }
+
+        public override CommandResult Invoke()
+        {
+            FileLogger.Log($"RepeatRequestCommand.Invoke called for {_request.Method} {_request.Url}");
+
+            _request.LastUsed = DateTime.Now;
+            _page.AddToHistory(_request);
 
             Task.Run(async () =>
             {
-                var response = await HttpRequestExecutor.ExecuteRequestAsync(request);
+                var response = await HttpRequestExecutor.ExecuteRequestAsync(_request);
                 string message = response.IsSuccess
                     ? $"{response.StatusCode} {response.StatusMessage}"
                     : $"Error: {response.ErrorMessage}";
 
-                ToastStatusMessage toast = new ToastStatusMessage($"{_method} {url}: {message}");
+                FileLogger.Log($"Request result: {message}");
+
+                ToastStatusMessage toast = new ToastStatusMessage($"{_request.Method} {_request.Url}: {message}");
                 toast.Show();
             });
 
-            return CommandResult.GoBack();
-        }
-        catch (Exception ex)
-        {
-            return CommandResult.ShowToast($"Error: {ex.Message}");
+            return CommandResult.KeepOpen();
         }
     }
-}
 
-internal static class HttpRequestExecutor
-{
-    private static readonly HttpClient _httpClient = new();
-
-    public static async Task<HttpResponseInfo> ExecuteRequestAsync(SavedRequest request)
+    // HTTP request executor
+    internal static class HttpRequestExecutor
     {
-        try
-        {
-            var httpRequest = new HttpRequestMessage
-            {
-                Method = new HttpMethod(request.Method),
-                RequestUri = new Uri(request.Url)
-            };
+        private static readonly HttpClient _httpClient = new HttpClient();
 
-            if (!string.IsNullOrEmpty(request.Headers))
+        static HttpRequestExecutor()
+        {
+            // Configure HttpClient
+            _httpClient.Timeout = TimeSpan.FromSeconds(30);
+            _httpClient.DefaultRequestHeaders.Add("User-Agent", "PaletteRequest/1.0");
+
+            FileLogger.Log("HttpRequestExecutor initialized");
+        }
+
+        public static async Task<HttpResponseInfo> ExecuteRequestAsync(SavedRequest request)
+        {
+            FileLogger.Log($"Executing {request.Method} request to {request.Url}");
+
+            try
             {
-                var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(request.Headers);
-                if (headers != null)
+                var httpRequest = new HttpRequestMessage
                 {
-                    foreach (var header in headers)
+                    Method = new HttpMethod(request.Method),
+                    RequestUri = new Uri(request.Url)
+                };
+
+                FileLogger.Log("Created HttpRequestMessage");
+
+                if (!string.IsNullOrEmpty(request.Headers))
+                {
+                    try
                     {
-                        httpRequest.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                        var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(request.Headers);
+                        if (headers != null)
+                        {
+                            foreach (var header in headers)
+                            {
+                                httpRequest.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                                FileLogger.Log($"Added header: {header.Key}");
+                            }
+                        }
+                    }
+                    catch (JsonException ex)
+                    {
+                        FileLogger.Log($"Error parsing headers JSON: {ex.Message}");
+                        return new HttpResponseInfo
+                        {
+                            IsSuccess = false,
+                            ErrorMessage = "Invalid JSON in headers"
+                        };
                     }
                 }
+
+                if ((request.Method == "POST" || request.Method == "PUT") && !string.IsNullOrEmpty(request.Body))
+                {
+                    httpRequest.Content = new StringContent(request.Body, Encoding.UTF8, "application/json");
+                    FileLogger.Log($"Added request body: {request.Body}");
+                }
+
+                FileLogger.Log("Sending HTTP request...");
+                var response = await _httpClient.SendAsync(httpRequest);
+                var statusCode = (int)response.StatusCode;
+                FileLogger.Log($"Received response: {statusCode} {response.StatusCode}");
+
+                var responseBody = await response.Content.ReadAsStringAsync();
+                FileLogger.Log($"Response body (first 100 chars): {responseBody.Substring(0, Math.Min(responseBody.Length, 100))}");
+
+                var responseInfo = new HttpResponseInfo
+                {
+                    IsSuccess = true,
+                    StatusCode = statusCode,
+                    StatusMessage = response.StatusCode.ToString(),
+                    Body = responseBody
+                };
+
+                foreach (var header in response.Headers)
+                {
+                    responseInfo.Headers.Add(header.Key, string.Join(", ", header.Value));
+                }
+
+                foreach (var header in response.Content.Headers)
+                {
+                    responseInfo.Headers.Add(header.Key, string.Join(", ", header.Value));
+                }
+
+                return responseInfo;
             }
-
-            if ((request.Method == "POST" || request.Method == "PUT") && !string.IsNullOrEmpty(request.Body))
+            catch (Exception ex)
             {
-                httpRequest.Content = new StringContent(request.Body, Encoding.UTF8, "application/json");
+                FileLogger.Log($"Error executing request: {ex.Message}");
+                return new HttpResponseInfo
+                {
+                    IsSuccess = false,
+                    ErrorMessage = ex.Message
+                };
             }
-
-            var response = await _httpClient.SendAsync(httpRequest);
-            var statusCode = (int)response.StatusCode;
-            var responseBody = await response.Content.ReadAsStringAsync();
-
-            var responseInfo = new HttpResponseInfo
-            {
-                IsSuccess = true,
-                StatusCode = statusCode,
-                StatusMessage = response.StatusCode.ToString(),
-                Body = responseBody
-            };
-
-            foreach (var header in response.Headers)
-            {
-                responseInfo.Headers.Add(header.Key, string.Join(", ", header.Value));
-            }
-
-            foreach (var header in response.Content.Headers)
-            {
-                responseInfo.Headers.Add(header.Key, string.Join(", ", header.Value));
-            }
-
-            return responseInfo;
-        }
-        catch (Exception ex)
-        {
-            return new HttpResponseInfo
-            {
-                IsSuccess = false,
-                ErrorMessage = ex.Message
-            };
         }
     }
-}
 
-internal class HttpResponseInfo
-{
-    public bool IsSuccess { get; set; }
-    public int StatusCode { get; set; }
-    public string StatusMessage { get; set; } = "";
-    public string Body { get; set; } = "";
-    public string ErrorMessage { get; set; } = "";
-    public Dictionary<string, string> Headers { get; set; } = new Dictionary<string, string>();
-}
+    // Response info class
+    internal class HttpResponseInfo
+    {
+        public bool IsSuccess { get; set; }
+        public int StatusCode { get; set; }
+        public string StatusMessage { get; set; } = "";
+        public string Body { get; set; } = "";
+        public string ErrorMessage { get; set; } = "";
+        public Dictionary<string, string> Headers { get; set; } = new Dictionary<string, string>();
+    }
 
-internal class SavedRequest
-{
-    public string Method { get; set; } = "GET";
-    public string Url { get; set; } = "";
-    public string Headers { get; set; } = "";
-    public string Body { get; set; } = "";
-    public DateTime LastUsed { get; set; } = DateTime.Now;
+    // Saved request class
+    internal class SavedRequest
+    {
+        public string Method { get; set; } = "GET";
+        public string Url { get; set; } = "";
+        public string Headers { get; set; } = "";
+        public string Body { get; set; } = "";
+        public DateTime LastUsed { get; set; } = DateTime.Now;
+    }
 }
-
