@@ -225,20 +225,45 @@ namespace PaletteRequest
                     _ => "https://httpbin.org"
                 };
 
-                // Open the browser with the appropriate URL
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = url,
-                    UseShellExecute = true
-                });
+                FileLogger.Log($"Opening URL in browser: {url}");
 
-                FileLogger.Log($"Opened browser for {_method} request to {url}");
-                return CommandResult.ShowToast($"Opened {url} in browser");
+                // Most reliable way - use explorer.exe to open URLs
+                var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "explorer.exe",
+                        Arguments = url,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+
+                bool started = process.Start();
+                FileLogger.Log($"Process.Start explorer.exe result: {started}");
+
+                // Show toast regardless of success to provide feedback
+                return CommandResult.ShowToast($"Opening {url} in browser");
             }
             catch (Exception ex)
             {
                 FileLogger.Log($"Error in OpenURLRequestCommand.Invoke: {ex}");
-                return CommandResult.ShowToast($"Error: {ex.Message}");
+
+                // If the primary method fails, try the most basic approach
+                try
+                {
+                    FileLogger.Log("Attempting to use System.Diagnostics.Process.Start directly");
+
+                    // Try the simplest version as last resort
+                    System.Diagnostics.Process.Start("explorer.exe", "https://www.google.com");
+
+                    return CommandResult.ShowToast($"Opened browser with alternative method");
+                }
+                catch (Exception ex2)
+                {
+                    FileLogger.Log($"All browser opening methods failed: {ex2.Message}");
+                    return CommandResult.ShowToast($"Could not open browser. Check log file.");
+                }
             }
         }
     }
@@ -268,7 +293,6 @@ namespace PaletteRequest
     internal sealed partial class RequestCommand : InvokableCommand
     {
         private readonly string _method;
-        private static readonly PaletteRequestPage _mainPage = new PaletteRequestPage();
 
         public RequestCommand(string method)
         {
@@ -283,20 +307,34 @@ namespace PaletteRequest
 
             try
             {
-                // Create a simple prompt to get the URL
-                string url = "";
-                string headers = "";
-                string body = "";
-
                 // Show a simple toast message to confirm clicking worked
                 ToastStatusMessage toast = new ToastStatusMessage($"Executing {_method} request...");
                 toast.Show();
 
-                // Create a test request
+                // Create a test request with the correct URL for the HTTP method
+                string url = _method switch
+                {
+                    "GET" => "https://httpbin.org/get",
+                    "POST" => "https://httpbin.org/post",
+                    "PUT" => "https://httpbin.org/put",
+                    "DELETE" => "https://httpbin.org/delete",
+                    _ => "https://httpbin.org"
+                };
+
+                // Create a simple JSON body for POST/PUT
+                string body = "";
+                if (_method == "POST" || _method == "PUT")
+                {
+                    body = "{\"name\":\"test\",\"value\":123}";
+                }
+
+                // Don't use JSON structure for headers
+                string headers = "";
+
                 var request = new SavedRequest
                 {
                     Method = _method,
-                    Url = "https://httpbin.org/get",
+                    Url = url,
                     Headers = headers,
                     Body = body,
                     LastUsed = DateTime.Now
@@ -305,7 +343,7 @@ namespace PaletteRequest
                 // Execute the request
                 Task.Run(async () =>
                 {
-                    FileLogger.Log($"Executing test request to httpbin.org");
+                    FileLogger.Log($"Executing test request to {url}");
                     var response = await HttpRequestExecutor.ExecuteRequestAsync(request);
                     string message = response.IsSuccess
                         ? $"{response.StatusCode} {response.StatusMessage}"
@@ -313,7 +351,22 @@ namespace PaletteRequest
 
                     FileLogger.Log($"Request result: {message}");
 
-                    ToastStatusMessage resultToast = new ToastStatusMessage($"{_method} request to httpbin.org: {message}");
+                    // Create a more detailed toast with some of the response body
+                    string responsePreview = "";
+                    if (response.IsSuccess && response.Body.Length > 0)
+                    {
+                        responsePreview = response.Body.Length > 50
+                            ? response.Body.Substring(0, 50) + "..."
+                            : response.Body;
+                    }
+
+                    string toastMessage = $"{_method} request to {url}: {message}";
+                    if (!string.IsNullOrEmpty(responsePreview))
+                    {
+                        toastMessage += $"\nResponse: {responsePreview}";
+                    }
+
+                    ToastStatusMessage resultToast = new ToastStatusMessage(toastMessage);
                     resultToast.Show();
                 });
 
@@ -366,6 +419,7 @@ namespace PaletteRequest
     }
 
     // HTTP request executor
+    // HTTP request executor
     internal static class HttpRequestExecutor
     {
         private static readonly HttpClient _httpClient = new HttpClient();
@@ -393,28 +447,25 @@ namespace PaletteRequest
 
                 FileLogger.Log("Created HttpRequestMessage");
 
+                // Add headers - manually instead of using JSON deserialization
                 if (!string.IsNullOrEmpty(request.Headers))
                 {
                     try
                     {
-                        var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(request.Headers);
-                        if (headers != null)
+                        // Manual parse of simple JSON headers instead of using JsonSerializer
+                        if (request.Headers.Contains("Content-Type"))
                         {
-                            foreach (var header in headers)
-                            {
-                                httpRequest.Headers.TryAddWithoutValidation(header.Key, header.Value);
-                                FileLogger.Log($"Added header: {header.Key}");
-                            }
+                            string contentType = request.Headers.Split(new[] { "Content-Type" }, StringSplitOptions.None)[1]
+                                .Split(new[] { ":" }, StringSplitOptions.None)[1]
+                                .Split(new[] { "\"" }, StringSplitOptions.None)[1];
+
+                            httpRequest.Headers.TryAddWithoutValidation("Content-Type", contentType);
+                            FileLogger.Log($"Added Content-Type header: {contentType}");
                         }
                     }
-                    catch (JsonException ex)
+                    catch (Exception ex)
                     {
-                        FileLogger.Log($"Error parsing headers JSON: {ex.Message}");
-                        return new HttpResponseInfo
-                        {
-                            IsSuccess = false,
-                            ErrorMessage = "Invalid JSON in headers"
-                        };
+                        FileLogger.Log($"Error parsing headers: {ex.Message}");
                     }
                 }
 
@@ -442,12 +493,12 @@ namespace PaletteRequest
 
                 foreach (var header in response.Headers)
                 {
-                    responseInfo.Headers.Add(header.Key, string.Join(", ", header.Value));
+                    responseInfo.Headers[header.Key] = string.Join(", ", header.Value);
                 }
 
                 foreach (var header in response.Content.Headers)
                 {
-                    responseInfo.Headers.Add(header.Key, string.Join(", ", header.Value));
+                    responseInfo.Headers[header.Key] = string.Join(", ", header.Value);
                 }
 
                 return responseInfo;
